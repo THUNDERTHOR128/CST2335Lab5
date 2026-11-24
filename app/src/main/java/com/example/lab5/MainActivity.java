@@ -1,263 +1,190 @@
-
 package com.example.lab5;
 
-import android.content.ContentValues;
-import android.database.Cursor;
-import android.database.sqlite.SQLiteDatabase;
-import android.graphics.Color;
 import android.os.Bundle;
+import android.os.AsyncTask;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
+import android.widget.ImageView;
+import android.widget.ProgressBar;
 import android.util.Log;
-import android.view.View;
-import android.view.ViewGroup;
-import android.widget.ArrayAdapter;
-import android.widget.Button;
-import android.widget.EditText;
-import android.widget.ListView;
-import android.widget.Switch;
-import android.widget.TextView;
-import android.widget.Toast;
 
-import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
-import androidx.activity.EdgeToEdge;
-import androidx.core.graphics.Insets;
-import androidx.core.view.ViewCompat;
-import androidx.core.view.WindowInsetsCompat;
 
-import java.util.ArrayList;
-import java.util.Arrays;
+import org.json.JSONObject;
+
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.InputStream;
+import java.net.URL;
+import java.net.HttpURLConnection;
+import java.util.Scanner;
 
 public class MainActivity extends AppCompatActivity {
 
-    private SQLiteDatabase db;
-    private DatabaseHelper dbHelper;
-
-    private EditText todoInput;
-    private Switch urgentSwitch;
-    private ListView todoList;
-
-    private final ArrayList<Todo> todos = new ArrayList<>();
-    private ArrayAdapter<Todo> adapter;
-
-    private static final String TAG = "Lab5Database";
-
-    private static class Todo {
-
-        long id;
-        String message;
-        boolean urgent;
-
-        Todo(long id, String message, boolean urgent) {
-            this.id = id;
-            this.message = message;
-            this.urgent = urgent;
-        }
-
-        @Override
-        public String toString() {
-            return message;
-        }
-    }
+    private ImageView catImage;
+    private ProgressBar progressBar;
+    private CatImages catTask;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        EdgeToEdge.enable(this);
         setContentView(R.layout.activity_main);
 
-        ViewCompat.setOnApplyWindowInsetsListener(
-                findViewById(R.id.main), (v, insets) -> {
-                    Insets bars = insets.getInsets(
-                            WindowInsetsCompat.Type.systemBars()
-                                    | WindowInsetsCompat.Type.ime());
-                    v.setPadding(bars.left, bars.top,
-                            bars.right, bars.bottom);
-                    return insets;
-                });
+        catImage = findViewById(R.id.catImage);
+        progressBar = findViewById(R.id.progressBar);
 
-        todoInput = findViewById(R.id.todoInput);
-        urgentSwitch = findViewById(R.id.urgentSwitch);
-        todoList = findViewById(R.id.todoList);
-        Button addButton = findViewById(R.id.addButton);
+        catTask = new CatImages();
+        catTask.execute();
+    }
 
-        dbHelper = new DatabaseHelper(this);
-        db = dbHelper.getWritableDatabase();
+    private class CatImages extends AsyncTask<String, Integer, String> {
 
-        adapter = new ArrayAdapter<Todo>(
-                this,
-                android.R.layout.simple_list_item_1,
-                todos) {
+        private Bitmap bitmap;
 
-            @Override
-            public View getView(int position,
-                                View convertView,
-                                ViewGroup parent) {
+        @Override
+        protected String doInBackground(String... strings) {
 
-                TextView view = (TextView) super.getView(
-                        position, convertView, parent);
+            while (!isCancelled()) {
 
-                Todo todo = getItem(position);
+                try {
+                    // Request a random cat from the API
+                    URL apiUrl = new URL(
+                            "https://cataas.com/cat?json=true");
 
-                if (todo != null && todo.urgent) {
-                    view.setBackgroundColor(Color.RED);
-                    view.setTextColor(Color.WHITE);
-                } else {
-                    view.setBackgroundColor(Color.WHITE);
-                    view.setTextColor(Color.BLACK);
+                    HttpURLConnection connection =
+                            (HttpURLConnection) apiUrl.openConnection();
+
+                    connection.setConnectTimeout(10000);
+                    connection.setReadTimeout(10000);
+
+                    String response;
+
+                    try (Scanner scanner =
+                                 new Scanner(connection.getInputStream())) {
+
+                        scanner.useDelimiter("\\A");
+                        response = scanner.next();
+                    } finally {
+                        connection.disconnect();
+                    }
+
+                    JSONObject json = new JSONObject(response);
+
+                    String id = json.has("id")
+                            ? json.getString("id")
+                            : json.getString("_id");
+
+                    String imageUrl = json.optString(
+                            "url", "https://cataas.com/cat/" + id);
+
+                    if (imageUrl.startsWith("/")) {
+                        imageUrl = "https://cataas.com" + imageUrl;
+                    }
+
+                    File imageFile = new File(
+                            getFilesDir(), id + ".jpg");
+
+                    // Check whether the image already exists
+                    if (imageFile.exists()) {
+
+                        bitmap = BitmapFactory.decodeFile(
+                                imageFile.getAbsolutePath());
+
+                        Log.d("Lab6", "Loaded local image: " + id);
+
+                    } else {
+
+                        bitmap = null;
+                    }
+
+                    // Download the image if necessary
+                    if (bitmap == null) {
+
+                        URL url = new URL(imageUrl);
+
+                        HttpURLConnection imageConnection =
+                                (HttpURLConnection) url.openConnection();
+
+                        imageConnection.setConnectTimeout(10000);
+                        imageConnection.setReadTimeout(10000);
+
+                        try (InputStream input =
+                                     imageConnection.getInputStream()) {
+
+                            bitmap = BitmapFactory.decodeStream(input);
+
+                        } finally {
+                            imageConnection.disconnect();
+                        }
+
+                        if (bitmap == null) {
+                            throw new Exception("Invalid image");
+                        }
+
+                        // Save the downloaded image locally
+                        try (FileOutputStream output =
+                                     new FileOutputStream(imageFile)) {
+
+                            bitmap.compress(
+                                    Bitmap.CompressFormat.JPEG,
+                                    100,
+                                    output);
+                        }
+
+                        Log.d("Lab6", "Downloaded image: " + id);
+                    }
+
+                    // Display the new picture
+                    publishProgress(-1);
+
+                    // Update progress bar for 5 seconds
+                    for (int i = 0; i <= 100 && !isCancelled(); i++) {
+
+                        publishProgress(i);
+                        Thread.sleep(50);
+                    }
+
+                } catch (Exception e) {
+
+                    Log.e("Lab6", "Error loading cat image", e);
+
+                    if (isCancelled()) {
+                        break;
+                    }
+
+                    try {
+                        Thread.sleep(2000);
+                    } catch (InterruptedException ex) {
+                        break;
+                    }
                 }
-
-                return view;
-            }
-        };
-
-        todoList.setAdapter(adapter);
-
-        loadTodos();
-
-        addButton.setOnClickListener(v -> addTodo());
-
-        todoList.setOnItemLongClickListener(
-                (parent, view, position, id) ->
-                        onItemLongClickHandler(position));
-    }
-
-    private void loadTodos() {
-
-        todos.clear();
-
-        Cursor cursor = db.query(
-                DatabaseHelper.TABLE_NAME,
-                null, null, null,
-                null, null,
-                DatabaseHelper.COL_ID + " ASC");
-
-        printCursor(cursor);
-
-        while (cursor.moveToNext()) {
-
-            long id = cursor.getLong(
-                    cursor.getColumnIndexOrThrow(
-                            DatabaseHelper.COL_ID));
-
-            String message = cursor.getString(
-                    cursor.getColumnIndexOrThrow(
-                            DatabaseHelper.COL_MESSAGE));
-
-            boolean urgent = cursor.getInt(
-                    cursor.getColumnIndexOrThrow(
-                            DatabaseHelper.COL_URGENT)) == 1;
-
-            todos.add(new Todo(id, message, urgent));
-        }
-
-        cursor.close();
-        adapter.notifyDataSetChanged();
-    }
-
-    private void addTodo() {
-
-        String message = todoInput.getText()
-                .toString().trim();
-
-        if (message.isEmpty()) {
-            Toast.makeText(this,
-                    R.string.empty_message,
-                    Toast.LENGTH_SHORT).show();
-            return;
-        }
-
-        boolean urgent = urgentSwitch.isChecked();
-
-        ContentValues values = new ContentValues();
-
-        values.put(DatabaseHelper.COL_MESSAGE, message);
-        values.put(DatabaseHelper.COL_URGENT,
-                urgent ? 1 : 0);
-
-        long id = db.insert(
-                DatabaseHelper.TABLE_NAME,
-                null, values);
-
-        if (id != -1) {
-            todos.add(new Todo(id, message, urgent));
-            adapter.notifyDataSetChanged();
-
-            todoInput.setText("");
-            urgentSwitch.setChecked(false);
-        } else {
-            Log.e(TAG, "Failed to insert task");
-        }
-    }
-
-    private boolean onItemLongClickHandler(int position) {
-
-        Todo todo = todos.get(position);
-
-        new AlertDialog.Builder(this)
-                .setTitle(R.string.delete_title)
-                .setMessage(R.string.delete_message)
-
-                .setPositiveButton(R.string.yes,
-                        (dialog, which) -> {
-
-                            int deleted = db.delete(
-                                    DatabaseHelper.TABLE_NAME,
-                                    DatabaseHelper.COL_ID + " = ?",
-                                    new String[]{
-                                            String.valueOf(todo.id)
-                                    });
-
-                            if (deleted > 0) {
-                                todos.remove(todo);
-                                adapter.notifyDataSetChanged();
-                            }
-                        })
-
-                .setNegativeButton(R.string.no, null)
-                .show();
-
-        return true;
-    }
-
-    private void printCursor(Cursor c) {
-
-        Log.d(TAG, "Database version: " + db.getVersion());
-
-        Log.d(TAG, "Number of columns: "
-                + c.getColumnCount());
-
-        Log.d(TAG, "Column names: "
-                + Arrays.toString(c.getColumnNames()));
-
-        Log.d(TAG, "Number of results: "
-                + c.getCount());
-
-        int originalPosition = c.getPosition();
-
-        c.moveToPosition(-1);
-
-        while (c.moveToNext()) {
-
-            StringBuilder row = new StringBuilder();
-
-            for (int i = 0; i < c.getColumnCount(); i++) {
-                row.append(c.getColumnName(i))
-                        .append(": ")
-                        .append(c.getString(i))
-                        .append(" | ");
             }
 
-            Log.d(TAG, "Row: " + row);
+            return "Finished";
         }
 
-        c.moveToPosition(originalPosition);
+        @Override
+        protected void onProgressUpdate(Integer... values) {
+
+            if (values[0] == -1) {
+
+                catImage.setImageBitmap(bitmap);
+                progressBar.setProgress(0);
+
+            } else {
+
+                progressBar.setProgress(values[0]);
+            }
+        }
     }
 
     @Override
     protected void onDestroy() {
-        if (dbHelper != null) {
-            dbHelper.close();
+
+        if (catTask != null) {
+            catTask.cancel(true);
         }
+
         super.onDestroy();
     }
 }
